@@ -33,26 +33,26 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 JST = timezone(timedelta(hours=9))
 
-SYSTEM_PROMPT = """あなたはげんさん（46歳、横浜在住）の友達AIです。
-LINEで自然に会話します。
+SYSTEM_PROMPT = """あなたは「げん」という名前のAIです。LINEで友達として自然に会話します。
 
-【キャラクター】
-- フラットでフレンドリー。タメ口。
-- 向こうから話しかけることもある。
-- ツッコミや雑談を自然に混ぜる。
-- 答えるだけにならず、こちらからも話を広げる。
+【話し方・キャラクター】
+- タメ口でゆるくフレンドリー
+- 短文が多い。長文は書かない
+- 「笑」「w」「ｗ」をたまに使う（使いすぎない）
+- 「りょうかい」「おけ」「だいじょぶ」などのゆるい表現を使う
+- 「～」「！」をたまに使う
+- 絵文字は「☺️✨♡」などをたまに使う程度（多用しない）
+- 相手のテンションに合わせる
+- 答えるだけじゃなく、こっちからも話を広げたり突っ込んだりする
+- 向こうから話題をふることもある
 
-【げんさんについて】
-- 元ソシャゲ運営15年、今はEC物販（CRITIER）を個人で運営中
-- Amazon Japan・楽天で中国輸入品を販売
-- 横浜/神奈川在住、MINI F55乗り、ピアノ独学、原神好き
-- 株や経済ニュースにも興味あり
+【相手について】
+- 名前：{nickname}
+- {user_profile}
 
-【会話スタイル】
-- LINEらしく短めのメッセージ
-- 絵文字は使わない
+【会話の注意】
 - 質問は一個だけ
-- 過去の会話の記憶があれば自然に引き継ぐ
+- 過去の記憶があれば自然に引き継ぐ
 
 過去の会話サマリー:
 {memory}
@@ -60,6 +60,31 @@ LINEで自然に会話します。
 直近の会話:
 {recent_chat}
 """
+
+def get_user(user_id: str) -> dict:
+    """ユーザー情報を取得"""
+    try:
+        result = supabase.table("users").select("*").eq("user_id", user_id).execute()
+        if result.data:
+            return result.data[0]
+    except:
+        pass
+    return {}
+
+def save_user(user_id: str, nickname: str):
+    """ユーザー情報を保存"""
+    try:
+        supabase.table("users").upsert({
+            "user_id": user_id,
+            "nickname": nickname,
+        }).execute()
+    except Exception as e:
+        print(f"save_user error: {e}")
+
+def is_new_user(user_id: str) -> bool:
+    """初回ユーザーか判定"""
+    user = get_user(user_id)
+    return not user or not user.get("nickname")
 
 def get_memory(user_id: str) -> str:
     """DBから記憶サマリーを取得"""
@@ -128,7 +153,15 @@ def chat_with_claude(user_id: str, user_message: str) -> str:
     """Claudeと会話"""
     memory = get_memory(user_id)
     recent_chat = get_recent_chat(user_id)
-    system = SYSTEM_PROMPT.format(memory=memory, recent_chat=recent_chat)
+    user = get_user(user_id)
+    nickname = user.get("nickname", "あなた")
+    user_profile = "（まだプロフィール情報なし。会話の中で覚えていく）"
+    system = SYSTEM_PROMPT.format(
+        nickname=nickname,
+        user_profile=user_profile,
+        memory=memory,
+        recent_chat=recent_chat
+    )
     response = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
@@ -254,6 +287,30 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     user_message = event.message.text
+
+    # 初回ユーザーは名前を聞く
+    if is_new_user(user_id):
+        # 2回目のメッセージで名前として保存
+        existing_msgs = get_recent_chat(user_id, limit=2)
+        if not existing_msgs:
+            # 初回メッセージ：名前を聞く
+            save_message(user_id, "user", user_message)
+            reply = "はじめまして！なんて呼べばいい？☺️"
+            save_message(user_id, "assistant", reply)
+        else:
+            # 2回目：名前として保存して会話開始
+            save_user(user_id, user_message)
+            save_message(user_id, "user", user_message)
+            reply = f"{user_message}ね！りょうかい～✨よろしく！"
+            save_message(user_id, "assistant", reply)
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply)]
+            ))
+        return
+
     save_message(user_id, "user", user_message)
     reply = chat_with_claude(user_id, user_message)
     save_message(user_id, "assistant", reply)
