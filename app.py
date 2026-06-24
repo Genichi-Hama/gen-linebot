@@ -335,11 +335,26 @@ def handle_message(event):
     reply = chat_with_claude(user_id, user_message)
     save_message(user_id, "assistant", reply)
     update_memory(user_id)
+
+    # 送り方をランダムで決定：分割/まとめ/中間を均等に
+    style = random.choice(["split", "combined", "mixed"])
+    lines = [l.strip() for l in reply.split("\n") if l.strip()]
+
+    if style == "split" and len(lines) > 1:
+        messages = [TextMessage(text=l) for l in lines[:5]]
+    elif style == "mixed" and len(lines) > 1:
+        mid = max(1, len(lines) // 2)
+        part1 = "\n".join(lines[:mid])
+        part2 = "\n".join(lines[mid:])
+        messages = [TextMessage(text=part1), TextMessage(text=part2)]
+    else:
+        messages = [TextMessage(text=reply)]
+
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
+            messages=messages
         ))
 
 if __name__ == "__main__":
