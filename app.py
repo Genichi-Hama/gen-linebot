@@ -137,10 +137,10 @@ def chat_with_claude(user_id: str, user_message: str) -> str:
     )
     return response.content[0].text
 
-def generate_proactive_message() -> str:
+def generate_proactive_message_for(uid: str) -> str:
     """Claudeに話しかけメッセージを生成させる"""
-    memory = get_memory(USER_LINE_ID)
-    recent_chat = get_recent_chat(USER_LINE_ID, limit=10)
+    memory = get_memory(uid)
+    recent_chat = get_recent_chat(uid, limit=10)
     now = datetime.now(JST)
     time_context = f"{now.strftime('%H時')}ごろ、{['月','火','水','木','金','土','日'][now.weekday()]}曜日"
 
@@ -190,20 +190,32 @@ def generate_proactive_message() -> str:
         print(f"generate_proactive_message error: {e}")
         return "いまなにしてる？"
 
-def send_proactive_message():
-    """気まぐれに話しかける"""
-    msg = generate_proactive_message()
+def get_all_user_ids() -> list:
+    """過去に会話したことがあるユーザーID一覧を取得"""
     try:
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            line_bot_api.push_message(PushMessageRequest(
-                to=USER_LINE_ID,
-                messages=[TextMessage(text=msg)]
-            ))
-        save_message(USER_LINE_ID, "assistant", msg)
-        print(f"Proactive message sent: {msg}")
+        result = supabase.table("messages").select("user_id").eq("role", "user").execute()
+        if result.data:
+            return list(set([m["user_id"] for m in result.data]))
     except Exception as e:
-        print(f"send_proactive_message error: {e}")
+        print(f"get_all_user_ids error: {e}")
+    return [USER_LINE_ID] if USER_LINE_ID else []
+
+def send_proactive_message():
+    """気まぐれに全ユーザーに話しかける"""
+    user_ids = get_all_user_ids()
+    for uid in user_ids:
+        try:
+            msg = generate_proactive_message_for(uid)
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(PushMessageRequest(
+                    to=uid,
+                    messages=[TextMessage(text=msg)]
+                ))
+            save_message(uid, "assistant", msg)
+            print(f"Proactive message sent to {uid}: {msg}")
+        except Exception as e:
+            print(f"send_proactive_message error for {uid}: {e}")
 
 def should_send_now() -> bool:
     """人間っぽい時間帯に偏らせた送信確率"""
