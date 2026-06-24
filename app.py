@@ -104,7 +104,7 @@ def get_recent_chat(user_id: str, limit: int = 20) -> str:
             msgs = list(reversed(result.data))
             lines = []
             for m in msgs:
-                role = "げんさん" if m["role"] == "user" else "AI"
+                role = "ユーザー" if m["role"] == "user" else "AI"
                 lines.append(f"{role}: {m['content']}")
             return "\n".join(lines)
     except:
@@ -130,7 +130,7 @@ def update_memory(user_id: str):
         if not result.data or len(result.data) < 20:
             return
         msgs = list(reversed(result.data))
-        chat_text = "\n".join([f"{'げんさん' if m['role']=='user' else 'AI'}: {m['content']}" for m in msgs])
+        chat_text = "\n".join([f"{'ユーザー' if m['role']=='user' else 'AI'}: {m['content']}" for m in msgs])
         summary_prompt = f"""以下の会話から、次回以降の会話で使える重要な情報を箇条書きで要約してください。
 げんさんの状況、気になってること、最近の出来事などを中心に。200文字以内で。
 
@@ -177,13 +177,13 @@ def generate_proactive_message_for(uid: str) -> str:
     now = datetime.now(JST)
     time_context = f"{now.strftime('%H時')}ごろ、{['月','火','水','木','金','土','日'][now.weekday()]}曜日"
 
-    prompt = f"""あなたはげんさん（46歳）の友達AIです。今からLINEで話しかけるメッセージを1つだけ作ってください。
+    user = get_user(uid)
+    nickname = user.get("nickname", "")
+    name_part = f"{nickname}さん" if nickname else "相手"
 
-【げんさんの基本情報】
-- 元ソシャゲ運営15年、今はAmazon/楽天で中国輸入物販（CRITIER）を個人運営
-- 株・経済ニュースに興味あり
-- 横浜在住、MINI F55乗り、ピアノ独学中、原神好き
-- 46歳
+    prompt = f"""あなたは「げん」というAIです。今からLINEで友達に話しかけるメッセージを1つだけ作ってください。
+
+【相手】{name_part}
 
 【今の時刻】{time_context}
 
@@ -194,23 +194,23 @@ def generate_proactive_message_for(uid: str) -> str:
 {recent_chat}
 
 【メッセージのバリエーション指示】
-以下のどれかのパターンで自然に話しかけてください。毎回同じパターンにならないよう、記憶や状況を見て選ぶこと。
+以下のどれかのパターンで自然に話しかけてください。毎回同じパターンにならないよう選ぶこと。
 
 パターンA: 近況確認
 「いまなにしてる？」「何してんの〜」など。シンプルでOK。
 
 パターンB: 過去の話の続き（記憶がある場合優先）
-「そういえば〜ってどうなった？」「あの件その後どう？」など、過去の会話を踏まえた質問。
+「そういえば〜ってどうなった？」「あの件その後どう？」など。
 
-パターンC: 興味に合わせた話題ふり
-げんさんが好きそうなネタ（物販・株・ゲーム・車・音楽など）を絡めた一言。
-例:「Amazon最近どう、稼げてる？」「原神新キャラ来てたな」「円相場また動いてたけど仕入れ影響ある？」など。
+パターンC: 雑談ふり
+日常・趣味・仕事など話題をふる一言。
 
 【ルール】
 - LINEっぽく短く（1〜2文）
 - タメ口
-- 絵文字なし
+- 絵文字はたまにでOK
 - メッセージ本文だけ出力（説明不要）
+- 名前は呼ばなくていい
 """
     try:
         response = claude.messages.create(
