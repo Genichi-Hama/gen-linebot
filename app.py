@@ -24,7 +24,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-USER_LINE_ID = os.environ["USER_LINE_ID"]  # げんさんのLINE ユーザーID
+USER_LINE_ID = os.environ.get("USER_LINE_ID", "")  # げんさんのLINE ユーザーID
 
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
