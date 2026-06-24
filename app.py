@@ -291,12 +291,147 @@ def get_all_user_ids() -> list:
         print(f"get_all_user_ids error: {e}")
     return [USER_LINE_ID] if USER_LINE_ID else []
 
+def get_user_status(uid: str) -> dict:
+    """ユーザーの返信状況を返す
+    status: active / no_reply_24h / no_reply_follow / no_reply_long
+    last_user_reply: 最後にユーザーが返信した時刻
+    last_bot_message: 最後にBOTが送った時刻
+    """
+    try:
+        result = supabase.table("messages").select("role, created_at").eq("user_id", uid).order("created_at", desc=True).limit(20).execute()
+        if not result.data:
+            return {"status": "active", "last_user_reply": None, "last_bot_message": None}
+
+        now = datetime.now(JST)
+        last_user_reply = None
+        last_bot_message = None
+
+        for m in result.data:
+            dt = datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")).astimezone(JST)
+            if m["role"] == "user" and last_user_reply is None:
+                last_user_reply = dt
+            if m["role"] == "assistant" and last_bot_message is None:
+                last_bot_message = dt
+            if last_user_reply and last_bot_message:
+                break
+
+        if last_user_reply is None:
+            return {"status": "active", "last_user_reply": None, "last_bot_message": last_bot_message}
+
+        hours_since_reply = (now - last_user_reply).total_seconds() / 3600
+
+        if hours_since_reply < 24:
+            status = "active"
+        elif hours_since_reply < 72:
+            status = "no_reply_24h"
+        elif hours_since_reply < 168:
+            status = "no_reply_follow"
+        else:
+            status = "no_reply_long"
+
+        return {"status": status, "last_user_reply": last_user_reply, "last_bot_message": last_bot_message}
+    except Exception as e:
+        print(f"get_user_status error: {e}")
+        return {"status": "active", "last_user_reply": None, "last_bot_message": None}
+
+def is_safe_hour() -> bool:
+    """0時〜7時は送らない"""
+    hour = datetime.now(JST).hour
+    return hour >= 7
+
+def generate_followup_message(status: str) -> str:
+    """返信なし状況に応じたフォローアップメッセージを生成"""
+    if status == "no_reply_24h":
+        candidates = [
+            "大丈夫？なんかあった？",
+            "最近どうした、忙しい？",
+            "ちょっと気になってた、元気にしてる？",
+            "なんか忙しそうだね、無理しないでね",
+            "返事なくて心配してた笑　元気？",
+        ]
+    elif status == "no_reply_follow":
+        candidates = [
+            "なんか大変そうだから、しばらくそっとしとくね。また気が向いたら連絡して♡",
+            "忙しそうだね、無理しないで。またいつでも話しかけて",
+            "なんかあったのかなって思ってる。落ち着いたら連絡きてほしいな",
+            "ちょっと心配してるけど、ペースに合わせるね。またいつでも♡",
+        ]
+    else:  # no_reply_long
+        candidates = [
+            "最近どうだ？大丈夫か？",
+            "久しぶり、元気にしてる？",
+            "しばらく経ったけど、どうしてるかなって",
+            "また話したいな、元気だといいな♡",
+        ]
+    return random.choice(candidates)
+
+def should_send_to_user(uid: str) -> tuple:
+    """このユーザーに今送るべきか判定。(送るべきか, メッセージタイプ)を返す"""
+    status_info = get_user_status(uid)
+    status = status_info["status"]
+    last_bot_message = status_info["last_bot_message"]
+    now = datetime.now(JST)
+
+    # 最後にBOTが送ってからの時間
+    if last_bot_message:
+        hours_since_bot = (now - last_bot_message).total_seconds() / 3600
+    else:
+        hours_since_bot = 999
+
+    if status == "active":
+        # 通常：1日1〜3回、30分チェックで確率ベース
+        weights = {
+            7: 0.05, 8: 0.08, 9: 0.05, 10: 0.03, 11: 0.04,
+            12: 0.10, 13: 0.08, 14: 0.04, 15: 0.04,
+            16: 0.04, 17: 0.06, 18: 0.12, 19: 0.10,
+            20: 0.08, 21: 0.06, 22: 0.04, 23: 0.02
+        }
+        hour = now.hour
+        prob = weights.get(hour, 0.0)
+        # 直近6時間以内に送ってたら確率を下げる
+        if hours_since_bot < 6:
+            prob *= 0.3
+        if random.random() < prob:
+            return True, "normal"
+        return False, None
+
+    elif status == "no_reply_24h":
+        # 24時間未返信：まだ送ってなければ送る（±3〜6時間ランダムずらし済み想定）
+        if hours_since_bot >= 24 + random.uniform(3, 6):
+            return True, "no_reply_24h"
+        return False, None
+
+    elif status == "no_reply_follow":
+        # さらに2日未返信：まだ送ってなければ送る
+        if hours_since_bot >= 48 + random.uniform(6, 12):
+            return True, "no_reply_follow"
+        return False, None
+
+    elif status == "no_reply_long":
+        # 1週間以上未返信：週1ループ
+        if hours_since_bot >= 168 + random.uniform(12, 24):
+            return True, "no_reply_long"
+        return False, None
+
+    return False, None
+
 def send_proactive_message():
-    """気まぐれに全ユーザーに話しかける"""
+    """全ユーザーに状況に応じて話しかける"""
+    if not is_safe_hour():
+        return
+
     user_ids = get_all_user_ids()
     for uid in user_ids:
         try:
-            msg = generate_proactive_message_for(uid)
+            should_send, msg_type = should_send_to_user(uid)
+            if not should_send:
+                continue
+
+            if msg_type == "normal":
+                msg = generate_proactive_message_for(uid)
+            else:
+                msg = generate_followup_message(msg_type)
+
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 line_bot_api.push_message(PushMessageRequest(
@@ -304,32 +439,15 @@ def send_proactive_message():
                     messages=[TextMessage(text=msg)]
                 ))
             save_message(uid, "assistant", msg)
-            print(f"Proactive message sent to {uid}: {msg}")
+            print(f"Proactive message sent to {uid} [{msg_type}]: {msg}")
         except Exception as e:
             print(f"send_proactive_message error for {uid}: {e}")
 
-def should_send_now() -> bool:
-    """人間っぽい時間帯に偏らせた送信確率"""
-    now = datetime.now(JST)
-    hour = now.hour
-    # 時間帯ごとの送信確率（1時間あたり）
-    weights = {
-        0: 0.0,  1: 0.0,  2: 0.0,  3: 0.0,   # 深夜（なし）
-        4: 0.0,  5: 0.0,  6: 0.0,  7: 0.0,   # 早朝（なし）
-        8: 0.08, 9: 0.05, 10: 0.03, 11: 0.04, # 朝〜昼前
-        12: 0.10, 13: 0.08, 14: 0.04, 15: 0.04, # 昼
-        16: 0.04, 17: 0.06, 18: 0.12, 19: 0.10, # 夕方〜夜
-        20: 0.08, 21: 0.06, 22: 0.04, 23: 0.02  # 夜
-    }
-    prob = weights.get(hour, 0.02)
-    return random.random() < prob
-
 def scheduler_loop():
-    """30分ごとにチェックして気まぐれ送信"""
+    """30分ごとにチェック"""
     while True:
-        if should_send_now():
-            send_proactive_message()
-        time.sleep(1800)  # 30分待機
+        send_proactive_message()
+        time.sleep(1800)
 
 @app.route("/callback", methods=["POST"])
 def callback():
