@@ -281,7 +281,7 @@ def chat_with_claude(user_id: str, user_message: str) -> str:
     )
     return response.content[0].text
 
-def generate_proactive_message_for(uid: str) -> str:
+def generate_proactive_message_for(uid: str, msg_type: str = "normal") -> str:
     """Claudeに話しかけメッセージを生成させる"""
     memory = get_memory(uid)
     recent_chat = get_recent_chat(uid, limit=10)
@@ -294,7 +294,7 @@ def generate_proactive_message_for(uid: str) -> str:
 
     # 時間帯別のメッセージ候補
     hour = now.hour
-    if 7 <= hour < 11:
+    if msg_type == "morning" or 7 <= hour < 11:
         time_suggestions = [
             "おはよ、起きた？",
             "朝ごはん食べた？",
@@ -312,11 +312,13 @@ def generate_proactive_message_for(uid: str) -> str:
             "今日仕事終わった？",
             "外出てる？",
         ]
-    elif 18 <= hour < 22:
+    elif msg_type == "evening" or 17 <= hour < 21:
         time_suggestions = [
             "夜ごはん食べた？",
             "今家にいる？",
             "今日仕事終わった？",
+            "今日どうだった？一言で",
+            "夕方になったね、疲れた？",
         ]
     else:
         time_suggestions = [
@@ -470,21 +472,42 @@ def should_send_to_user(uid: str) -> tuple:
         hours_since_bot = 999
 
     if status == "active":
-        # 通常：1日1〜3回、30分チェックで確率ベース
-        weights = {
-            7: 0.05, 8: 0.08, 9: 0.05, 10: 0.03, 11: 0.04,
-            12: 0.10, 13: 0.08, 14: 0.04, 15: 0.04,
-            16: 0.04, 17: 0.06, 18: 0.12, 19: 0.10,
-            20: 0.08, 21: 0.06, 22: 0.04, 23: 0.02
-        }
         hour = now.hour
-        prob = weights.get(hour, 0.0)
-        # 直近6時間以内に送ってたら確率を下げる
-        if hours_since_bot < 6:
-            prob *= 0.3
-        if random.random() < prob:
-            return True, "normal"
-        return False, None
+
+        # 朝（7〜10時）：おはよう系、平均2日に1回（50%）
+        if 7 <= hour < 10:
+            # 今日すでに朝のメッセージ送ってたらスキップ
+            if hours_since_bot < 6:
+                return False, None
+            # 50%の確率で送る（30分チェックなので7〜10時の間に1回チャンスがある）
+            # 各30分チェックで約8%にすると3時間で約50%に収束
+            if random.random() < 0.08:
+                return True, "morning"
+            return False, None
+
+        # 夕方〜夜（17〜21時）：夕方系、毎日送る
+        elif 17 <= hour < 21:
+            # 今日すでに夕方のメッセージ送ってたらスキップ
+            if hours_since_bot < 4:
+                return False, None
+            # 各30分チェックで約12%にすると4時間で約60%に収束
+            if random.random() < 0.12:
+                return True, "evening"
+            return False, None
+
+        # その他時間帯：たまに送る
+        else:
+            weights = {
+                10: 0.03, 11: 0.04, 12: 0.08, 13: 0.06,
+                14: 0.03, 15: 0.03, 16: 0.03,
+                21: 0.04, 22: 0.03, 23: 0.02
+            }
+            prob = weights.get(hour, 0.0)
+            if hours_since_bot < 4:
+                prob *= 0.2
+            if random.random() < prob:
+                return True, "normal"
+            return False, None
 
     elif status == "no_reply_24h":
         # 24時間未返信：まだ送ってなければ送る（±3〜6時間ランダムずらし済み想定）
@@ -518,8 +541,8 @@ def send_proactive_message():
             if not should_send:
                 continue
 
-            if msg_type == "normal":
-                msg = generate_proactive_message_for(uid)
+            if msg_type in ("normal", "morning", "evening"):
+                msg = generate_proactive_message_for(uid, msg_type)
             else:
                 msg = generate_followup_message(msg_type)
 
