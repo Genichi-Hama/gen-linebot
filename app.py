@@ -529,15 +529,18 @@ def should_send_to_user(uid: str) -> tuple:
 
     return False, None
 
-def send_proactive_message():
+def send_proactive_message(force=False):
     """全ユーザーに状況に応じて話しかける"""
-    if not is_safe_hour():
+    if not force and not is_safe_hour():
         return
 
     user_ids = get_all_user_ids()
     for uid in user_ids:
         try:
-            should_send, msg_type = should_send_to_user(uid)
+            if force:
+                should_send, msg_type = True, "evening"
+            else:
+                should_send, msg_type = should_send_to_user(uid)
             if not should_send:
                 continue
 
@@ -607,8 +610,13 @@ def send_special_day_messages():
 def scheduler_loop():
     """30分ごとにチェック"""
     while True:
-        send_special_day_messages()
-        send_proactive_message()
+        now = datetime.now(JST)
+        # テスト用：20:50に強制送信
+        if now.hour == 20 and now.minute >= 50:
+            send_proactive_message(force=True)
+        else:
+            send_special_day_messages()
+            send_proactive_message()
         time.sleep(1800)
 
 @app.route("/")
