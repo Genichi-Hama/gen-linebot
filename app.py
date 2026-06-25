@@ -695,8 +695,9 @@ def handle_message(event):
             messages=messages
         ))
 
+# スケジューラーをバックグラウンドで起動（gunicorn対応）
+t = threading.Thread(target=scheduler_loop, daemon=True)
+t.start()
+
 if __name__ == "__main__":
-    # スケジューラーをバックグラウンドで起動
-    t = threading.Thread(target=scheduler_loop, daemon=True)
-    t.start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
