@@ -610,13 +610,8 @@ def send_special_day_messages():
 def scheduler_loop():
     """30分ごとにチェック"""
     while True:
-        now = datetime.now(JST)
-        # テスト用：20:50に強制送信
-        if now.hour == 20 and now.minute >= 50:
-            send_proactive_message(force=True)
-        else:
-            send_special_day_messages()
-            send_proactive_message()
+        send_special_day_messages()
+        send_proactive_message()
         time.sleep(1800)
 
 @app.route("/")
