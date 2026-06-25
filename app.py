@@ -667,17 +667,24 @@ def handle_message(event):
     save_message(user_id, "assistant", reply)
     update_memory(user_id)
 
-    # 送り方をランダムで決定：分割/まとめ/中間を均等に
-    style = random.choice(["split", "combined", "mixed"])
+    # 送り方：70%まとめ、30%分割（2〜3個まで）
     lines = [l.strip() for l in reply.split("\n") if l.strip()]
-
-    if style == "split" and len(lines) > 1:
-        messages = [TextMessage(text=l) for l in lines[:5]]
-    elif style == "mixed" and len(lines) > 1:
-        mid = max(1, len(lines) // 2)
-        part1 = "\n".join(lines[:mid])
-        part2 = "\n".join(lines[mid:])
-        messages = [TextMessage(text=part1), TextMessage(text=part2)]
+    if len(lines) >= 2 and random.random() < 0.3:
+        split_count = random.randint(2, min(3, len(lines)))
+        if split_count == 2:
+            mid = max(1, len(lines) // 2)
+            messages = [
+                TextMessage(text="\n".join(lines[:mid])),
+                TextMessage(text="\n".join(lines[mid:]))
+            ]
+        else:
+            third = max(1, len(lines) // 3)
+            messages = [
+                TextMessage(text="\n".join(lines[:third])),
+                TextMessage(text="\n".join(lines[third:third*2])),
+                TextMessage(text="\n".join(lines[third*2:]))
+            ]
+        messages = [m for m in messages if m.text.strip()]
     else:
         messages = [TextMessage(text=reply)]
 
