@@ -623,6 +623,11 @@ def scheduler_loop():
 def index():
     return "OK", 200
 
+@app.route("/test_send")
+def test_send():
+    send_proactive_message(force=True)
+    return "送信完了", 200
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
