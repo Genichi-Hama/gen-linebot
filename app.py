@@ -588,6 +588,10 @@ def scheduler_loop():
         send_proactive_message()
         time.sleep(1800)
 
+@app.route("/")
+def index():
+    return "OK", 200
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
