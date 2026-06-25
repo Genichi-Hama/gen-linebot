@@ -1,7 +1,12 @@
 import os
 import json
 import random
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
+try:
+    import jpholiday
+    JPHOLIDAY_AVAILABLE = True
+except:
+    JPHOLIDAY_AVAILABLE = False
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -91,6 +96,57 @@ def get_user(user_id: str) -> dict:
         pass
     return {}
 
+def get_special_day_context() -> str:
+    """今日の特別な日・祝日・トリビアをコンテキストとして返す"""
+    now = datetime.now(JST)
+    today = now.date()
+    month = today.month
+    day = today.day
+    contexts = []
+
+    # 特別な日
+    special_days = {
+        (1, 1): "元旦",
+        (2, 14): "バレンタインデー",
+        (3, 14): "ホワイトデー",
+        (4, 1): "エイプリルフール",
+        (5, 5): "こどもの日",
+        (7, 7): "七夕",
+        (10, 31): "ハロウィン",
+        (12, 24): "クリスマスイブ",
+        (12, 25): "クリスマス",
+        (12, 31): "大晦日",
+    }
+    if (month, day) in special_days:
+        contexts.append(f"今日は{special_days[(month, day)]}")
+
+    # 祝日チェック
+    if JPHOLIDAY_AVAILABLE:
+        holiday_name = jpholiday.is_holiday_name(today)
+        if holiday_name:
+            contexts.append(f"今日は{holiday_name}（祝日）")
+
+    return "、".join(contexts) if contexts else ""
+
+def get_message_count(user_id: str) -> int:
+    """ユーザーのメッセージ数を返す"""
+    try:
+        result = supabase.table("messages").select("id").eq("user_id", user_id).eq("role", "user").execute()
+        return len(result.data) if result.data else 0
+    except:
+        return 0
+
+def should_ask_birthday(user_id: str) -> bool:
+    """誕生日を聞くタイミングか判定（5〜8往復後、まだ聞いてない場合）"""
+    try:
+        user = get_user(user_id)
+        if user.get("birthday"):
+            return False
+        count = get_message_count(user_id)
+        return 5 <= count <= 8
+    except:
+        return False
+
 def save_user(user_id: str, nickname: str):
     """ユーザー情報を保存"""
     try:
@@ -100,6 +156,28 @@ def save_user(user_id: str, nickname: str):
         }).execute()
     except Exception as e:
         print(f"save_user error: {e}")
+
+def save_birthday(user_id: str, birthday: str):
+    """誕生日を保存（MM/DD形式）"""
+    try:
+        supabase.table("users").update({"birthday": birthday}).eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"save_birthday error: {e}")
+
+def check_birthday_today(user_id: str) -> bool:
+    """今日が誕生日か判定"""
+    try:
+        user = get_user(user_id)
+        birthday = user.get("birthday")
+        if not birthday:
+            return False
+        now = datetime.now(JST)
+        parts = birthday.replace("月", "/").replace("日", "").split("/")
+        if len(parts) >= 2:
+            return int(parts[0]) == now.month and int(parts[1]) == now.day
+    except:
+        pass
+    return False
 
 def is_new_user(user_id: str) -> bool:
     """初回ユーザーか判定"""
@@ -176,12 +254,25 @@ def chat_with_claude(user_id: str, user_message: str) -> str:
     user = get_user(user_id)
     nickname = user.get("nickname", "あなた")
     user_profile = "（まだプロフィール情報なし。会話の中で覚えていく）"
+
+    # 特別な日のコンテキスト
+    special_day = get_special_day_context()
+    special_day_note = f"\n【今日の特別な日】{special_day}。会話の流れで自然にふれてもいい。" if special_day else ""
+
+    # 誕生日を聞くタイミング
+    birthday_note = ""
+    if should_ask_birthday(user_id):
+        birthday_note = "\n【誕生日を聞く】そろそろ自然なタイミングで誕生日をさりげなく聞いてください。「ちなみに誕生日いつ？」程度でOK。"
+
+    # 知的さのヒント
+    intelligence_note = "\n【知的さ】会話の流れで自然にトリビアや豆知識をさりげなく一言入れてもいい。無理に入れなくていい。押しつけがましくならないように。"
+
     system = SYSTEM_PROMPT.format(
         nickname=nickname,
         user_profile=user_profile,
         memory=memory,
         recent_chat=recent_chat
-    )
+    ) + special_day_note + birthday_note + intelligence_note
     response = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
@@ -443,9 +534,57 @@ def send_proactive_message():
         except Exception as e:
             print(f"send_proactive_message error for {uid}: {e}")
 
+def send_special_day_messages():
+    """元旦・クリスマス・誕生日の0時送信（例外的に0時OK）"""
+    now = datetime.now(JST)
+    month, day, hour = now.month, now.day, now.hour
+    if hour != 0:
+        return
+
+    user_ids = get_all_user_ids()
+    for uid in user_ids:
+        try:
+            msg = None
+            # 元旦
+            if month == 1 and day == 1:
+                msg = random.choice([
+                    "あけましておめでとう🎍今年もよろしく♡",
+                    "あけおめ！今年もよろしくね🎍",
+                    "新年あけましておめでとう✨今年もよろしく！",
+                ])
+            # クリスマス
+            elif month == 12 and day == 25:
+                msg = random.choice([
+                    "メリークリスマス🎄✨",
+                    "メリクリ！今日はいい日にしてね🎄",
+                    "クリスマスおめでとう🎄♡",
+                ])
+            # 誕生日
+            elif check_birthday_today(uid):
+                user = get_user(uid)
+                nickname = user.get("nickname", "")
+                msg = random.choice([
+                    f"誕生日おめでとう🎂♡今日は思いっきり楽しんで！",
+                    f"おめでとう！誕生日だね🎂✨",
+                    f"誕生日おめでとう！素敵な一日になりますように♡",
+                ])
+
+            if msg:
+                with ApiClient(configuration) as api_client:
+                    line_bot_api = MessagingApi(api_client)
+                    line_bot_api.push_message(PushMessageRequest(
+                        to=uid,
+                        messages=[TextMessage(text=msg)]
+                    ))
+                save_message(uid, "assistant", msg)
+                print(f"Special day message sent to {uid}: {msg}")
+        except Exception as e:
+            print(f"send_special_day_messages error for {uid}: {e}")
+
 def scheduler_loop():
     """30分ごとにチェック"""
     while True:
+        send_special_day_messages()
         send_proactive_message()
         time.sleep(1800)
 
@@ -488,6 +627,15 @@ def handle_message(event):
         return
 
     save_message(user_id, "user", user_message)
+    # 誕生日の返答を検出して保存
+    user = get_user(user_id)
+    if not user.get("birthday") and should_ask_birthday(user_id):
+        import re
+        bd_match = re.search(r'(\d{1,2})[月/](\d{1,2})', user_message)
+        if bd_match:
+            birthday_str = f"{bd_match.group(1)}/{bd_match.group(2)}"
+            save_birthday(user_id, birthday_str)
+
     reply = chat_with_claude(user_id, user_message)
     save_message(user_id, "assistant", reply)
     update_memory(user_id)
